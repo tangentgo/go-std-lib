@@ -45,3 +45,4 @@ func TestPipe_Usage(t *testing.T) {
 }
 
 // 必须强调，在同一个协程内对 Pipe 进行读写是毫无意义且绝对会引发致命死锁（Deadlock）的。
+// io.Pipe 是同步的（无缓冲），它的设计初衷就是为了在不同协程之间进行数据流式传输。
