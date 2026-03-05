@@ -216,3 +216,83 @@ func TestFileStreamIO(t *testing.T) {
 		t.Errorf("数据流合成错误，结果为: %s", finalData)
 	}
 }
+func TestFileControlAndSync(t *testing.T) {
+	f, _ := os.Create("control.txt")
+	defer os.Remove("control.txt")
+
+	f.WriteString("CRITICAL DATA")
+
+	// 1. 测试 Sync
+	if err := f.Sync(); err != nil {
+		t.Fatalf("Sync 刷盘命令失败: %v", err)
+	}
+
+	// 2. 测试 Seek
+	f.Seek(0, 0) // 重置到文件开头
+	buf := make([]byte, 8)
+	f.Read(buf)
+	if string(buf) != "CRITICAL" {
+		t.Errorf("Seek 重置游标失败")
+	}
+
+	// 3. 测试 Stat
+	info, _ := f.Stat()
+	if info.Size() != 13 {
+		t.Errorf("Stat 获取元数据异常，期望大小 13，实际 %d", info.Size())
+	}
+
+	// 4. 测试 Fd
+	fd := f.Fd()
+	if fd == ^uintptr(0) {
+		t.Errorf("获取的底层描述符句柄无效")
+	}
+
+	// 5. 测试 Close
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close 释放描述符失败: %v", err)
+	}
+}
+func TestDirectoryIteration(t *testing.T) {
+	dirName := "iter_test_dir"
+	os.Mkdir(dirName, 0755)
+	os.WriteFile(dirName+"/f1.txt", nil, 0644)
+	os.WriteFile(dirName+"/f2.txt", nil, 0644)
+	defer os.RemoveAll(dirName)
+
+	dirObj, _ := os.Open(dirName)
+	defer dirObj.Close()
+
+	// 1. 测试 ReadDir
+	entries, err := dirObj.ReadDir(-1) // -1 表示读取全部
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("ReadDir 读取目录条目失败")
+	}
+
+	dirObj.Seek(0, 0) // 必须重置目录游标才能进行下一次迭代
+
+	// 2. 测试 Readdirnames
+	names, err := dirObj.Readdirnames(-1)
+	if err != nil || len(names) != 2 {
+		t.Fatalf("Readdirnames 读取字符串名称失败")
+	}
+}
+func TestFileDeadlines(t *testing.T) {
+	// 管道是演示阻塞 I/O 的绝佳结构
+	reader, writer, _ := os.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	// 设定一个在过去的时间点，强制其立刻触发超时异常
+	pastTime := time.Now().Add(-1 * time.Second)
+	if err := reader.SetReadDeadline(pastTime); err != nil {
+		t.Fatalf("SetReadDeadline 设置失败: %v", err)
+	}
+
+	buf := make([]byte, 10)
+	_, err := reader.Read(buf) // 由于没有任何写入动作，正常情况下这里会永远阻塞
+
+	// 验证是否按预期抛出了超时错误
+	if !os.IsTimeout(err) {
+		t.Errorf("预期的超时截断机制未生效，实际错误: %v", err)
+	}
+}
