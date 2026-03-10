@@ -48,6 +48,7 @@ func TestProcessExecutionAndHandle(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		cmdName = "timeout"
+		args = []string{"timeout", "1"}
 		args = []string{"timeout", "/T", "1", "/NOBREAK"}
 	}
 
@@ -123,5 +124,50 @@ func TestSystemPropertiesAndDirectories(t *testing.T) {
 
 	if home == "" || config == "" || cache == "" {
 		t.Errorf("操作系统的环境规范获取失败，某些目录未正确解析")
+	}
+}
+func TestIPCAndVirtualFilesystem(t *testing.T) {
+	// 1. 测试 Pipe 进行并发 IPC
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe 创建匿名通道失败: %v", err)
+	}
+
+	go func() {
+		// 在新协程中写入管道，利用通道传递字符串
+		w.Write([]byte("Kernel Ring Buffer Message"))
+		w.Close() // 只有关闭写入端，读取端才会收到 EOF，打破阻塞
+	}()
+
+	buffer := make([]byte, 64)
+	n, _ := r.Read(buffer)
+	r.Close()
+
+	if string(buffer[:n]) != "Kernel Ring Buffer Message" {
+		t.Errorf("IPC 管道传输数据损坏或丢失，收到： %s", string(buffer[:n]))
+	}
+
+	// 2. 测试 DirFS 与 CopyFS 结构转移
+	vfsSource := "source_vfs"
+	vfsTarget := "target_vfs"
+	os.Mkdir(vfsSource, 0755)
+	os.WriteFile(vfsSource+"/node.txt", []byte("vfs payload"), 0644)
+	defer func() {
+		os.RemoveAll(vfsSource)
+		os.RemoveAll(vfsTarget)
+	}()
+
+	// 将物理层包裹成 FS 接口
+	virtualSystem := os.DirFS(vfsSource)
+
+	// 将 FS 接口映射并持久化拷贝到另一侧磁盘
+	os.Mkdir(vfsTarget, 0755)
+	if err := os.CopyFS(vfsTarget, virtualSystem); err != nil {
+		t.Fatalf("CopyFS 转储虚拟文件系统失败: %v", err)
+	}
+
+	verifyData, _ := os.ReadFile(vfsTarget + "/node.txt")
+	if string(verifyData) != "vfs payload" {
+		t.Errorf("CopyFS 数据复制存在丢失")
 	}
 }
